@@ -9,6 +9,7 @@ LOCAL_SRC_FILES:= \
     ril.cpp \
     ril_event.cpp\
     RilSapSocket.cpp \
+    ril_config.cpp \
     ril_service.cpp \
     sap_service.cpp
 
@@ -20,6 +21,16 @@ LOCAL_SHARED_LIBRARIES := \
     librilutils \
     android.hardware.radio@1.0 \
     android.hardware.radio@1.1 \
+    android.hardware.radio@1.2 \
+    android.hardware.radio@1.3 \
+    android.hardware.radio@1.4 \
+    android.hardware.radio@1.5 \
+    android.hardware.radio@1.6 \
+    android.hardware.radio.config@1.0 \
+    android.hardware.radio.config@1.1 \
+    android.hardware.radio.config@1.2 \
+    android.hardware.radio.config@1.3 \
+    android.hardware.radio.deprecated@1.0 \
     libhidlbase \
 
 LOCAL_STATIC_LIBRARIES := \

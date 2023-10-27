@@ -189,13 +189,23 @@ static UnsolResponseInfo s_unsolResponses[] = {
 #include "ril_unsol_commands.h"
 };
 
+/* Radio Config Request @{ */
+static CommandInfo s_configCommands[] = {
+#include "ril_config_commands.h"
+};
+
+static UnsolResponseInfo s_configUnsolResponses[] = {
+#include "ril_config_unsol_commands.h"
+};
+/* }@ */
+
 char * RIL_getServiceName() {
     return ril_service_name;
 }
 
 RequestInfo *
 addRequestToList(int serial, int slotId, int request) {
-    RequestInfo *pRI;
+    RequestInfo *pRI = nullptr;
     int ret;
     RIL_SOCKET_ID socket_id = (RIL_SOCKET_ID) slotId;
     /* Hook for current context */
@@ -231,6 +241,13 @@ addRequestToList(int serial, int slotId, int request) {
 
     pRI->token = serial;
     pRI->pCI = &(s_commands[request]);
+
+    if (request >= RIL_REQUEST_RADIO_CONFIG_BASE &&
+        request <= RIL_REQUEST_RADIO_CONFIG_LAST) {
+        request = request - RIL_REQUEST_RADIO_CONFIG_BASE;
+        pRI->pCI = &(s_configCommands[request]);
+    }
+
     pRI->socket_id = socket_id;
 
     ret = pthread_mutex_lock(pendingRequestsMutexHook);
@@ -285,12 +302,12 @@ static void resendLastNITZTimeData(RIL_SOCKET_ID socket_id) {
                            : RESPONSE_UNSOLICITED;
         // acquire read lock for the service before calling nitzTimeReceivedInd() since it reads
         // nitzTimeReceived in ril_service
-        pthread_rwlock_t *radioServiceRwlockPtr = radio::getRadioServiceRwlock(
+        pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock(
                 (int) socket_id);
         int rwlockRet = pthread_rwlock_rdlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
 
-        int ret = radio::nitzTimeReceivedInd(
+        int ret = radio_1_6::nitzTimeReceivedInd(
             (int)socket_id, responseType, 0,
             RIL_E_SUCCESS, s_lastNITZTimeData, s_lastNITZTimeDataSize);
         if (ret == 0) {
@@ -432,7 +449,7 @@ RIL_register (const RIL_RadioFunctions *callbacks) {
         return;
     }
 
-    RLOGE("RIL_register: RIL version %d", callbacks->version);
+    RLOGD("RIL_register: RIL version %d", callbacks->version);
 
     if (s_registerCalled > 0) {
         RLOGE("RIL_register has been called more than once. "
@@ -456,8 +473,22 @@ RIL_register (const RIL_RadioFunctions *callbacks) {
                 == s_unsolResponses[i].requestNumber);
     }
 
-    radio::registerService(&s_callbacks, s_commands);
+    radio_1_6::registerService(&s_callbacks, s_commands);
     RLOGI("RILHIDL called registerService");
+
+    /* Radio Config Request @{ */
+    for (int i = 1; i < (int)NUM_ELEMS(s_configCommands); i++) {
+        assert(i == s_configCommands[i].requestNumber -
+            RIL_REQUEST_RADIO_CONFIG_BASE);
+    }
+
+    for (int i = 0; i < (int)NUM_ELEMS(s_configUnsolResponses); i++) {
+        assert(i == s_configUnsolResponses[i].requestNumber -
+            RIL_UNSOL_RESPONSE_RADIO_CONFIG_BASE);
+    }
+    radio_1_6::registerConfigService(&s_callbacks, s_configCommands);
+    /* }@ */
+
 
 }
 
@@ -574,12 +605,12 @@ RIL_onRequestAck(RIL_Token t) {
     appendPrintBuf("Ack [%04d]< %s", pRI->token, requestToString(pRI->pCI->requestNumber));
 
     if (pRI->cancelled == 0) {
-        pthread_rwlock_t *radioServiceRwlockPtr = radio::getRadioServiceRwlock(
+        pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock(
                 (int) socket_id);
         int rwlockRet = pthread_rwlock_rdlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
 
-        radio::acknowledgeRequest((int) socket_id, pRI->token);
+        radio_1_6::acknowledgeRequest((int) socket_id, pRI->token);
 
         rwlockRet = pthread_rwlock_unlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
@@ -599,6 +630,7 @@ RIL_onRequestComplete(RIL_Token t, RIL_Errno e, void *response, size_t responsel
     }
 
     socket_id = pRI->socket_id;
+
 #if VDBG
     RLOGD("RequestComplete, %s", rilSocketIdToString(socket_id));
 #endif
@@ -631,7 +663,7 @@ RIL_onRequestComplete(RIL_Token t, RIL_Errno e, void *response, size_t responsel
         RLOGE ("Calling responseFunction() for token %d", pRI->token);
 #endif
 
-        pthread_rwlock_t *radioServiceRwlockPtr = radio::getRadioServiceRwlock((int) socket_id);
+        pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock((int) socket_id);
         int rwlockRet = pthread_rwlock_rdlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
 
@@ -731,6 +763,7 @@ void RIL_onUnsolicitedResponse(int unsolResponse, const void *data,
     int ret;
     bool shouldScheduleTimeout = false;
     RIL_SOCKET_ID soc_id = RIL_SOCKET_1;
+    UnsolResponseInfo *pURI = NULL;
 
 #if defined(ANDROID_MULTI_SIM)
     soc_id = socket_id;
@@ -745,10 +778,22 @@ void RIL_onUnsolicitedResponse(int unsolResponse, const void *data,
 
     unsolResponseIndex = unsolResponse - RIL_UNSOL_RESPONSE_BASE;
 
-    if ((unsolResponseIndex < 0)
-        || (unsolResponseIndex >= (int32_t)NUM_ELEMS(s_unsolResponses))) {
+    if ((unsolResponse < RIL_UNSOL_RESPONSE_BASE)
+        || (unsolResponse > RIL_UNSOL_RESPONSE_LAST
+                && unsolResponse < RIL_UNSOL_RESPONSE_RADIO_CONFIG_BASE)
+        || (unsolResponse > RIL_UNSOL_RESPONSE_RADIO_CONFIG_LAST)) {
         RLOGE("unsupported unsolicited response code %d", unsolResponse);
         return;
+    }
+
+    if (unsolResponse >= RIL_UNSOL_RESPONSE_BASE
+            && unsolResponse <= RIL_UNSOL_RESPONSE_LAST) {
+        unsolResponseIndex = unsolResponse - RIL_UNSOL_RESPONSE_BASE;
+        pURI = &(s_unsolResponses[unsolResponseIndex]);
+    } else if (unsolResponse >= RIL_UNSOL_RESPONSE_RADIO_CONFIG_BASE
+            && unsolResponse <= RIL_UNSOL_RESPONSE_RADIO_CONFIG_LAST) {
+        unsolResponseIndex = unsolResponse - RIL_UNSOL_RESPONSE_RADIO_CONFIG_BASE;
+        pURI = &(s_configUnsolResponses[unsolResponseIndex]);
     }
 
     // Grab a wake lock if needed for this reponse,
@@ -777,23 +822,24 @@ void RIL_onUnsolicitedResponse(int unsolResponse, const void *data,
         responseType = RESPONSE_UNSOLICITED;
     }
 
-    pthread_rwlock_t *radioServiceRwlockPtr = radio::getRadioServiceRwlock((int) soc_id);
+    pthread_rwlock_t *radioServiceRwlockPtr = radio_1_6::getRadioServiceRwlock((int) soc_id);
     int rwlockRet;
 
     if (unsolResponse == RIL_UNSOL_NITZ_TIME_RECEIVED) {
         // get a write lock in caes of NITZ since setNitzTimeReceived() is called
         rwlockRet = pthread_rwlock_wrlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
-        radio::setNitzTimeReceived((int) soc_id, android::elapsedRealtime());
+        radio_1_6::setNitzTimeReceived((int) soc_id, android::elapsedRealtime());
     } else {
         rwlockRet = pthread_rwlock_rdlock(radioServiceRwlockPtr);
         assert(rwlockRet == 0);
     }
 
-    if (s_unsolResponses[unsolResponseIndex].responseFunction) {
-        ret = s_unsolResponses[unsolResponseIndex].responseFunction(
-                (int) soc_id, responseType, 0, RIL_E_SUCCESS, const_cast<void*>(data),
-                datalen);
+    if (pURI != NULL && pURI->responseFunction != NULL) {
+        ret = pURI->responseFunction((int) soc_id, responseType, 0, RIL_E_SUCCESS,
+                const_cast<void*>(data), datalen);
+    } else {
+        RLOGW("No call responseFunction defined for UNSOLICITED");
     }
 
     rwlockRet = pthread_rwlock_unlock(radioServiceRwlockPtr);
@@ -1068,6 +1114,9 @@ requestToString(int request) {
         case RIL_REQUEST_SET_FACILITY_LOCK: return "SET_FACILITY_LOCK";
         case RIL_REQUEST_CHANGE_BARRING_PASSWORD: return "CHANGE_BARRING_PASSWORD";
         case RIL_REQUEST_QUERY_NETWORK_SELECTION_MODE: return "QUERY_NETWORK_SELECTION_MODE";
+        case RIL_REQUEST_SET_SYSTEM_SELECTION_CHANNELS: return "RIL_REQUEST_SET_SYSTEM_SELECTION_CHANNELS";
+        case RIL_REQUEST_GET_SYSTEM_SELECTION_CHANNELS: return "RIL_REQUEST_GET_SYSTEM_SELECTION_CHANNELS";
+        case RIL_REQUEST_START_NETWORK_SCAN: return "RIL_REQUEST_START_NETWORK_SCAN";
         case RIL_REQUEST_SET_NETWORK_SELECTION_AUTOMATIC: return "SET_NETWORK_SELECTION_AUTOMATIC";
         case RIL_REQUEST_SET_NETWORK_SELECTION_MANUAL: return "SET_NETWORK_SELECTION_MANUAL";
         case RIL_REQUEST_QUERY_AVAILABLE_NETWORKS: return "QUERY_AVAILABLE_NETWORKS";
@@ -1081,6 +1130,8 @@ requestToString(int request) {
         case RIL_REQUEST_LAST_DATA_CALL_FAIL_CAUSE: return "LAST_DATA_CALL_FAIL_CAUSE";
         case RIL_REQUEST_DATA_CALL_LIST: return "DATA_CALL_LIST";
         case RIL_REQUEST_RESET_RADIO: return "RESET_RADIO";
+        case RIL_REQUEST_OEM_HOOK_RAW: return "OEM_HOOK_RAW";
+        case RIL_REQUEST_OEM_HOOK_STRINGS: return "OEM_HOOK_STRINGS";
         case RIL_REQUEST_SCREEN_STATE: return "SCREEN_STATE";
         case RIL_REQUEST_SET_SUPP_SVC_NOTIFICATION: return "SET_SUPP_SVC_NOTIFICATION";
         case RIL_REQUEST_WRITE_SMS_TO_SIM: return "WRITE_SMS_TO_SIM";
@@ -1159,6 +1210,18 @@ requestToString(int request) {
         case RIL_REQUEST_SET_CARRIER_RESTRICTIONS: return "SET_CARRIER_RESTRICTIONS";
         case RIL_REQUEST_GET_CARRIER_RESTRICTIONS: return "GET_CARRIER_RESTRICTIONS";
         case RIL_REQUEST_SET_CARRIER_INFO_IMSI_ENCRYPTION: return "SET_CARRIER_INFO_IMSI_ENCRYPTION";
+        case RIL_REQUEST_SET_SIGNAL_STRENGTH_REPORTING_CRITERIA: return "SET_SIGNAL_STRENGTH_REPORTING_CRITERIA";
+        case RIL_REQUEST_SET_LINK_CAPACITY_REPORTING_CRITERIA: return "SET_LINK_CAPACITY_REPORTING_CRITERIA";
+        case RIL_REQUEST_ENABLE_UICC_APPLICATIONS: return "ENABLE_UICC_APPLICATIONS";
+        case RIL_REQUEST_ARE_UICC_APPLICATIONS_ENABLED: return "ARE_UICC_APPLICATIONS_ENABLED";
+        case RIL_REQUEST_ENTER_SIM_DEPERSONALIZATION: return "ENTER_SIM_DEPERSONALIZATION";
+        case RIL_REQUEST_CDMA_SEND_SMS_EXPECT_MORE: return "CDMA_SEND_SMS_EXPECT_MORE";
+        case RIL_REQUEST_GET_BARRING_INFO: return "GET_BARRING_INFO";
+        case RIL_REQUEST_SET_PREFERRED_NETWORK_TYPE_BITMAP: return "SET_PREFERRED_NETWORK_TYPE_BITMAP";
+        case RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE_BITMAP: return "GET_PREFERRED_NETWORK_TYPE_BITMAP";
+        case RIL_REQUEST_SET_ALLOWED_NETWORK_TYPES_BITMAP: return "SET_ALLOWED_NETWORK_TYPES_BITMAP";
+        case RIL_REQUEST_GET_ALLOWED_NETWORK_TYPES_BITMAP: return "GET_ALLOWED_NETWORK_TYPES_BITMAP";
+        case RIL_REQUEST_GET_SLICING_CONFIG: return "GET_SLICING_CONFIG";
         case RIL_RESPONSE_ACKNOWLEDGEMENT: return "RESPONSE_ACKNOWLEDGEMENT";
         case RIL_UNSOL_RESPONSE_RADIO_STATE_CHANGED: return "UNSOL_RESPONSE_RADIO_STATE_CHANGED";
         case RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED: return "UNSOL_RESPONSE_CALL_STATE_CHANGED";

@@ -1,6 +1,6 @@
-/* //device/system/reference-ril/at_tok.h
+/*
 **
-** Copyright 2006, The Android Open Source Project
+** Copyright 2020, The Android Open Source Project
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
 ** you may not use this file except in compliance with the License.
@@ -14,19 +14,16 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+#pragma once
 
-#ifndef AT_TOK_H
-#define AT_TOK_H 1
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-int at_tok_start(char **p_cur);
-int at_tok_nextint(char **p_cur, int *p_out);
-int at_tok_nexthexint(char **p_cur, int *p_out);
-
-int at_tok_nextbool(char **p_cur, char *p_out);
-int at_tok_nextstr(char **p_cur, char **out);
-
-int at_tok_hasmore(char **p_cur);
-
-void skipNextComma(char **p_cur);
-
-#endif /*AT_TOK_H */
+/** decode base64, returns the encoded output */
+int base64_decode(const char *base64, unsigned char *bindata);
+/** encode base64, returns the number of bytes decoded */
+char *base64_encode(const unsigned char *bindata, char *base64, int binlength);
+#ifdef __cplusplus
+}
+#endif

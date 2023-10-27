@@ -6,6 +6,7 @@ LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= \
+    base64util.cpp \
     reference-ril.c \
     atchannel.c \
     misc.c \
